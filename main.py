@@ -1,61 +1,84 @@
-import os
 import asyncio
-import random
 import logging
-import requests
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+import os
+
+from aiogram import Bot, Dispatcher, Router, types
+from aiogram.filters import CommandStart
+from supabase import create_client
+from dotenv import load_dotenv
+
+# ---------- ENV ----------
+load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN not set")
 
-logging.basicConfig(level=logging.INFO)
+# ---------- LOGGING ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 
-bot = Bot(BOT_TOKEN)
+# ---------- BOT ----------
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+router = Router()
+dp.include_router(router)
 
 # ---------- SUPABASE ----------
-def sb_select(table, query=""):
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}{query}", headers=HEADERS)
-    r.raise_for_status()
-    return r.json()
-
-def sb_insert(table, data):
-    r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS, json=data)
-    r.raise_for_status()
-
-def sb_update(table, data, match):
-    r = requests.patch(f"{SUPABASE_URL}/rest/v1/{table}?{match}", headers=HEADERS, json=data)
-    r.raise_for_status()
+supabase = None
+if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # ---------- HANDLERS ----------
-@dp.message(Command("start"))
-async def start(message: types.Message):
+@router.message(CommandStart())
+async def start_handler(message: types.Message):
     tg_id = message.from_user.id
     username = message.from_user.username
 
-    users = sb_select("users", f"?tg_id=eq.{tg_id}")
-    if not users:
-        sb_insert("users", {"tg_id": tg_id, "username": username, "gip": 0})
+    # создаём пользователя, если есть supabase
+    if supabase:
+        supabase.table("users").upsert(
+            {
+                "tg_id": tg_id,
+                "username": username,
+                "gip": 0
+            }
+        ).execute()
 
-    await message.answer("🔥 GIP bot запущен\n\n/cases")
+    kb = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="🎁 Кейсы",
+                    callback_data="open_cases"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="🛒 Маркет",
+                    web_app=types.WebAppInfo(
+                        url="https://example.com"  # потом заменим
+                    )
+                )
+            ]
+        ]
+    )
 
-@dp.message(Command("cases"))
-async def cases(message: types.Message):
-    cases = sb_select("cases")
-    text = "🎁 Кейсы:\n\n"
-    for c in cases:
-        text += f"{c['id']}. {c['name']} — {c['price']} GIP\n"
-    await message.answer(text)
+    await message.answer(
+        "👋 Добро пожаловать в **GIP**\n\n"
+        "🎁 Кейсы\n"
+        "🛒 Маркетплейс\n"
+        "💠 Подарки и NFT",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
 
-# ---------- START ----------
+# ---------- MAIN ----------
 async def main():
     await dp.start_polling(bot)
 
